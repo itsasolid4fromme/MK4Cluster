@@ -1,0 +1,16 @@
+| Component                          | Quantity | Notes                                |
+| ---------------------------------- | -------- | ------------------------------------ |
+| Arduino Nano (or clone)            | 1        | Use USB or VIN for power input       |
+| 0.96" I2C OLED Display (128x64)    | 1        | SSD1306-based, I2C interface         |
+| Bosch 0281006059 MAP Sensor        | 1        | Provides Boost (A0) and IAT (A1)     |
+| 0-100 PSI Oil Pressure Sensor      | 1        | 3-wire, 5V type, analog output to A2 |
+| VW Speed Sensor (1J0 919 050)      | 1        | Connect signal to D2                 |
+| VW Fuel Sender (1J0 919 050)       | 1        | Wired as voltage divider into A3     |
+| Momentary Button (Trip Reset)      | 1        | Connect to D4 with internal pull-up  |
+| LED (for startup indicator)        | 1        | Connect to D7 through 220Ω resistor  |
+| 470Ω Resistor (Fuel divider)       | 1        | Connects to fuel sender signal       |
+| 10K or 2.2K Resistor (IAT pull-up) | 1        | Connected between A1 and 5V          |
+| 220Ω Resistor (LED current limit)  | 1        | For startup LED                      |
+| Optional: 0.1µF capacitors         | 3–5      | For sensor filtering (optional)      |
+| 12V to 5V DC converter             | 1        | For powering Arduino from car supply |
+| Protoboard / PCB / Enclosure       | 1 each   | For final installation               |

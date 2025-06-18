@@ -1,0 +1,56 @@
+TFT Display (ILI9341, 8-bit Parallel)
+TFT Pin	Connect to Mega Pin	Notes
+VCC	5V	Power (check if labeled 3.3V only!)
+GND	GND	Ground
+LCD_RD	5V (or A8 if needed)	Tie high if unused
+LCD_WR	A0	Write strobe
+LCD_RS	A1	Register Select / DC
+LCD_CS	A2	Chip Select
+LCD_RST	A3	Reset
+D0	22	Data bit 0
+D1	23	Data bit 1
+D2	24	Data bit 2
+D3	25	Data bit 3
+D4	26	Data bit 4
+D5	27	Data bit 5
+D6	28	Data bit 6
+D7	29	Data bit 7
+
+
+Bosch 0281006059 MAP Sensor
+Sensor Pin	Function	Connect to Mega Pin
+Pin 1	GND	GND
+Pin 2	IAT Signal	A7
+Pin 3	+5V	5V
+Pin 4	Boost Signal	A6
+Pull-up resistor	10K between A7 and 5V
+
+
+Oil Pressure Sensor (0–100 PSI, 5V)
+Wire	Connect to Mega Pin
+Signal	A8
+VCC	5V
+GND	GND
+Fuel Sender (1J0 919 050, resistance type)
+Connection	Notes
+One leg to GND	Tank ground
+Other leg to:	Connected to A9 through a voltage divider
+Voltage divider	470Ω from 5V to A9, sender from A9 to GND
+Signal to A9	A9 (reads fuel level)
+
+
+Speed Sensor (1J0 919 149 E — VSS)
+Wire	Connect to Mega Pin	Notes
+Signal	D2	Interrupt input
+Power	5V	Check sensor label
+GND	GND	Ground
+Trip Reset Button
+Button Pin	Connect to Mega Pin	Notes
+One leg	D3	Digital input with internal pull-up
+Other leg	GND	Momentary switch to ground
+
+
+Startup LED
+LED Pin	Connect to Mega Pin	Notes
+Anode	D4 via 220Ω	Output (HIGH = ON)
+Cathode	GND	

@@ -1,0 +1,225 @@
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_GFX.h>
+#include <EEPROM.h>
+
+// OLED display configuration (128x64 OLED, I2C address 0x3C):
+#define OLED_ADDR 0x3C
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+
+// Pin assignments
+const int OIL_PIN    = A2;  // Oil pressure sensor analog input
+const int MAP_PIN    = A0;  // MAP sensor (boost) analog input
+const int IAT_PIN    = A1;  // IAT sensor analog input (with pull-up resistor)
+const int FUEL_PIN   = A3;  // Fuel level sensor analog input (voltage divider)
+const int VSS_PIN    = 2;   // Vehicle speed sensor digital input (must be interrupt-capable, D2 or D3 on Nano)
+const int BTN_PIN    = 4;   // Trip reset button digital input
+const int LED_PIN    = 7;   // Startup indicator LED output (could use 13 for onboard LED)
+
+// Calibration and constants for conversions
+// Oil pressure sensor calibration (0.5V=0 PSI, 4.5V=100 PSI):
+const int OIL_ZERO_ADC = 102;    // ADC reading at 0 PSI (~0.5V)
+const int OIL_FULL_ADC = 921;    // ADC reading at 100 PSI (~4.5V)
+const float OIL_MAX_PSI = 100.0; // Pressure at full scale
+
+// MAP sensor calibration (Bosch 4-bar TMAP):
+const int MAP_ZERO_ADC = 102;    // ADC at 50 kPa (0.5V)
+const int MAP_FULL_ADC = 921;    // ADC at 400 kPa (4.5V)
+const float MAP_MIN_KPA = 50.0;  // 50 kPa at 0.5V
+const float MAP_MAX_KPA = 400.0; // 400 kPa at 4.5V
+float ambient_kPa = 101.0;       // stored ambient pressure (kPa) for zero-boost reference
+
+// Fuel level calibration (adjust these based on actual readings):
+int fuelEmptyADC = 614;  // example ADC reading when tank is empty (285Ω)
+int fuelFullADC  = 82;   // example ADC reading when tank is full (40Ω)
+
+// IAT thermistor and conversion constants:
+const float R_PULL   = 10000.0; // Pull-up resistor for IAT (change if you used a different value, e.g., 2200.0)
+const double A_coef  = 0.00129; // Steinhart–Hart coefficients for thermistor (approximate for Bosch IAT)
+const double B_coef  = 0.000266;
+const double C_coef  = 0.000000122;
+// Alternatively, for Beta formula (if not using S-H):
+const double T0_ref  = 298.15;  // 25°C in Kelvin (reference temperature)
+const double R0_ref  = 2050.0;  // ~2.05kΩ at 25°C for this sensor
+const double Beta    = 3540.0;  // Beta coefficient
+
+// Trip odometer storage
+unsigned long tripPulseCount = 0;    // total pulses counted for the trip
+unsigned long lastSavedPulseCount = 0; // last saved value to EEPROM
+const int EEPROM_ADDR = 0;           // starting address in EEPROM for trip data (uses 4 bytes)
+
+// Speed measurement
+volatile unsigned long pulseCount = 0;  // pulse count since last speed calculation (interrupt increments this)
+unsigned long lastSpeedMillis = 0;
+const unsigned long speedInterval = 500; // speed calculation interval in ms (e.g., 500 ms)
+
+// Button debounce 
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50; // 50 ms debounce time
+
+// LED timing
+unsigned long startTime;
+
+void IRAM_ATTR onVSSPulse() {
+  // Interrupt Service Routine for VSS pulse
+  pulseCount++;
+  tripPulseCount++;
+}
+
+void setup() {
+  // Initialize serial (optional, for debugging)
+  Serial.begin(9600);
+
+  // Pin modes
+  pinMode(VSS_PIN, INPUT_PULLUP);    // speed sensor (assuming open-collector to ground)
+  pinMode(BTN_PIN, INPUT_PULLUP);    // button with internal pull-up
+  pinMode(LED_PIN, OUTPUT);
+
+  // Initialize display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    // Display init failed
+    // You could blink LED or halt here
+  }
+  display.clearDisplay();
+  display.setTextSize(1);      // small font size so 6 lines fit
+  display.setTextColor(SSD1306_WHITE);
+
+  // Read saved trip distance (pulse count) from EEPROM
+  EEPROM.get(EEPROM_ADDR, tripPulseCount);
+  lastSavedPulseCount = tripPulseCount;
+  
+  // Initialize ambient pressure (optional: read sensor to auto-calibrate)
+  int raw = analogRead(MAP_PIN);
+  float pressure_kPa = (raw - MAP_ZERO_ADC) * (MAP_MAX_KPA - MAP_MIN_KPA) / (MAP_FULL_ADC - MAP_ZERO_ADC) + MAP_MIN_KPA;
+  ambient_kPa = pressure_kPa;  // assume engine off at startup gives ambient pressure
+  if (ambient_kPa < 80 || ambient_kPa > 120) {
+    // If reading is out of plausible range, default to 101 kPa
+    ambient_kPa = 101.0;
+  }
+
+  // Attach interrupt for speed sensor
+  attachInterrupt(digitalPinToInterrupt(VSS_PIN), onVSSPulse, FALLING);
+
+  // Turn on LED for startup indication
+  digitalWrite(LED_PIN, HIGH);
+  startTime = millis();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // Handle startup LED timing (non-blocking)
+  if (currentMillis - startTime >= 4000) {
+    // 4 seconds elapsed since start
+    digitalWrite(LED_PIN, LOW);
+  }
+
+  // Handle speed calculation at regular intervals (non-blocking timing)
+  if (currentMillis - lastSpeedMillis >= speedInterval) {
+    noInterrupts();
+    unsigned long pulses = pulseCount;
+    pulseCount = 0;
+    interrupts();
+    lastSpeedMillis = currentMillis;
+    // Calculate speed in MPH
+    // If using 500ms interval, multiply by 2 to get pulses per second
+    float pulsesPerSec = (float)pulses * (1000.0 / speedInterval);
+    float speedMph = pulsesPerSec * 0.45;  // 0.45 mph per pulse/sec (8000 pulses = 3600 sec/hr -> factor 3600/8000=0.45)
+    // You could add smoothing here by averaging with previous speed value if desired.
+    
+    // Read and convert sensor values:
+    // Oil pressure (PSI)
+    int rawOil = analogRead(OIL_PIN);
+    float oilPsi = (rawOil - OIL_ZERO_ADC) * (OIL_MAX_PSI / (OIL_FULL_ADC - OIL_ZERO_ADC));
+    if (oilPsi < 0) oilPsi = 0;
+
+    // Fuel level (%)
+    int rawFuel = analogRead(FUEL_PIN);
+    // map rawFuel from [fuelFullADC, fuelEmptyADC] to [100, 0]%
+    int fuelPercent = map(rawFuel, fuelFullADC, fuelEmptyADC, 100, 0);
+    if (fuelPercent < 0) fuelPercent = 0;
+    if (fuelPercent > 100) fuelPercent = 100;
+
+    // Boost pressure (PSI)
+    int rawMAP = analogRead(MAP_PIN);
+    float pressure_kPa = (rawMAP - MAP_ZERO_ADC) * (MAP_MAX_KPA - MAP_MIN_KPA) / (MAP_FULL_ADC - MAP_ZERO_ADC) + MAP_MIN_KPA;
+    float boost_kPa = pressure_kPa - ambient_kPa;
+    if (boost_kPa < 0) boost_kPa = 0;
+    float boostPsi = boost_kPa / 6.89476;  // convert kPa to PSI
+
+    // Intake Air Temperature (°F)
+    int rawIAT = analogRead(IAT_PIN);
+    float Vout = rawIAT * (5.0 / 1023.0);
+    float Rth = R_PULL * (Vout / (5.0 - Vout));
+    // Option 1: Use Steinhart–Hart
+    double lnR = log(Rth);
+    double invT = A_coef + B_coef * lnR + C_coef * pow(lnR, 3);
+    double tempK = 1.0 / invT;
+    double tempC = tempK - 273.15;
+    double tempF = tempC * 9.0 / 5.0 + 32.0;
+    // (Option 2: Beta formula is available if needed, but we'll use S-H by default)
+
+    // Trip distance (miles)
+    float tripMiles = tripPulseCount / 8000.0;
+    
+    // Update OLED display lines
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("SPD ");
+    display.print((int)round(speedMph));
+    display.println(" MPH");
+
+    display.print("BST ");
+    display.print(boostPsi, 1); // one decimal place
+    display.println(" PSI");
+
+    display.print("IAT ");
+    display.print((int)round(tempF));
+    display.println(" F");   // change to C if needed
+
+    display.print("OIL ");
+    display.print((int)round(oilPsi));
+    display.println(" PSI");
+
+    display.print("Fuel % ");
+    display.print(fuelPercent);
+    display.println("%");
+
+    display.print("TRIP ");
+    display.print(tripMiles, 1); // one decimal (e.g. "123.4")
+    display.println(" mi");
+
+    display.display(); // push updates to the OLED
+
+    // Occasionally save trip to EEPROM to avoid data loss (non-blocking and infrequent)
+    // Here, we save if the pulse count has increased by a significant amount since last save.
+    if (tripPulseCount >= lastSavedPulseCount + 800) { // e.g. save every 0.1 mile (800 pulses) 
+      EEPROM.put(EEPROM_ADDR, tripPulseCount);
+      lastSavedPulseCount = tripPulseCount;
+    }
+  }
+
+  // Button handling (debounce and trip reset)
+  int buttonReading = digitalRead(BTN_PIN);
+  if (buttonReading != lastButtonState) {
+    // button state changed, reset debounce timer
+    lastDebounceTime = currentMillis;
+    lastButtonState = buttonReading;
+  }
+  if ((currentMillis - lastDebounceTime) > debounceDelay) {
+    // stable state for > debounceDelay
+    if (lastButtonState == LOW) {
+      // Button pressed (went from HIGH to LOW)
+      // Reset trip distance
+      tripPulseCount = 0;
+      // Update EEPROM immediately on reset
+      EEPROM.put(EEPROM_ADDR, (unsigned long)0);
+      lastSavedPulseCount = 0;
+    }
+  }
+
+  // (Loop repeats continuously, non-blocking)
+}

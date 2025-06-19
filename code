@@ -1,29 +1,28 @@
+#include <MCUFRIEND_kbv.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-#include <SPI.h>
 #include <EEPROM.h>
 
-// ===== TFT Pins =====
-#define TFT_CS    10
-#define TFT_DC     9
-#define TFT_RST    8
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+MCUFRIEND_kbv tft;
 
-// ===== Input Pins =====
-#define VSS_PIN    2
-#define BTN_PIN    3
-#define LED_PIN    4
+// === Color Definitions ===
+#define COLOR_BLACK  0x0000
+#define COLOR_WHITE  0xFFFF
 
-// ===== Analog Pins =====
-#define MAP_PIN    A0
-#define IAT_PIN    A1
-#define OIL_PIN    A2
-#define FUEL_PIN   A3
+// === Analog Input Pins
+#define MAP_PIN   A6
+#define IAT_PIN   A7
+#define OIL_PIN   A5
+#define FUEL_PIN  A4
 
-// ===== Calibration Constants =====
+// === Other I/O
+#define VSS_PIN    10
+#define BTN_PIN    11
+#define LED_PIN    12
+
+// === Calibration Constants
 #define OIL_ZERO_ADC 102
 #define OIL_FULL_ADC 921
-#define OIL_MAX_PSI 100.0
+#define OIL_MAX_PSI  100.0
 
 #define MAP_ZERO_ADC 102
 #define MAP_FULL_ADC 921
@@ -37,20 +36,18 @@ int fuelFullADC  = 82;
 const float R_PULL = 10000.0;
 const double A_coef = 0.00129, B_coef = 0.000266, C_coef = 0.000000122;
 
-// ===== Speed & Trip Tracking =====
+// === Speed / Trip Tracking
 volatile unsigned long pulseCount = 0;
 unsigned long tripPulseCount = 0;
 unsigned long lastSavedPulseCount = 0;
 unsigned long lastSpeedMillis = 0;
-const unsigned long speedInterval = 500;  // ms
+const unsigned long speedInterval = 500;
 const int EEPROM_ADDR = 0;
 
-// ===== Button Debounce =====
+// === Debounce
 bool lastButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
-
-// ===== Startup LED Timing =====
 unsigned long startTime;
 
 void onVSSPulse() {
@@ -60,7 +57,7 @@ void onVSSPulse() {
 
 void setup() {
   Serial.begin(9600);
-  
+
   pinMode(VSS_PIN, INPUT_PULLUP);
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
@@ -72,13 +69,17 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);
   startTime = millis();
 
-  tft.begin();
-  tft.setRotation(1);
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+  uint16_t ID = 0x9341;
+  Serial.print("Forcing TFT ID = 0x");
+  Serial.println(ID, HEX);
 
-  // Ambient pressure read at key-on
+  tft.begin(ID);
+  tft.setRotation(0);
+  tft.fillScreen(COLOR_BLACK);
+  tft.setTextSize(3);
+  tft.setTextColor(COLOR_WHITE, COLOR_BLACK);
+
+  // Read ambient MAP pressure (engine off)
   int raw = analogRead(MAP_PIN);
   float pressure_kPa = (raw - MAP_ZERO_ADC) * (MAP_MAX_KPA - MAP_MIN_KPA) / (MAP_FULL_ADC - MAP_ZERO_ADC) + MAP_MIN_KPA;
   if (pressure_kPa > 80 && pressure_kPa < 120) ambient_kPa = pressure_kPa;
@@ -119,21 +120,37 @@ void loop() {
     double tempK = 1.0 / invT;
     double tempF = (tempK - 273.15) * 9.0 / 5.0 + 32.0;
 
-    // Display Output
+    // === Display Output ===
     tft.setCursor(10, 10);
-    tft.printf("SPD: %3d MPH", (int)round(mph));
-    tft.setCursor(10, 40);
-    tft.printf("BST: %.1f PSI", boostPsi);
-    tft.setCursor(10, 70);
-    tft.printf("IAT: %3d F", (int)round(tempF));
-    tft.setCursor(10, 100);
-    tft.printf("OIL: %3d PSI", (int)round(oilPsi));
-    tft.setCursor(10, 130);
-    tft.printf("FUEL: %3d%%", fuelPercent);
-    tft.setCursor(10, 160);
-    tft.printf("TRIP: %.1f mi", tripMiles);
+    tft.print("SPD: ");
+    tft.print((int)round(mph));
+    tft.print(" MPH");
 
-    // EEPROM save
+    tft.setCursor(10, 40);
+    tft.print("BST: ");
+    tft.print(boostPsi, 1);
+    tft.print(" ");
+
+    tft.setCursor(10, 70);
+    tft.print("IAT: ");
+    tft.print((int)round(tempF));
+    tft.print(" F");
+
+    tft.setCursor(10, 100);
+    tft.print("OIL: ");
+    tft.print((int)round(oilPsi));
+    tft.print(" PSI");
+
+    tft.setCursor(10, 130);
+    tft.print("FUEL: ");
+    tft.print(fuelPercent);
+    tft.print("%");
+
+    tft.setCursor(10, 160);
+    tft.print("TRIP: ");
+    tft.print(tripMiles, 1);
+    tft.print(" mi");
+
     if (tripPulseCount >= lastSavedPulseCount + 800) {
       EEPROM.put(EEPROM_ADDR, tripPulseCount);
       lastSavedPulseCount = tripPulseCount;
@@ -142,7 +159,6 @@ void loop() {
     lastSpeedMillis = now;
   }
 
-  // Button debounce for trip reset
   int reading = digitalRead(BTN_PIN);
   if (reading != lastButtonState) {
     lastDebounceTime = millis();
